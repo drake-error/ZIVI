@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { createClient } from '@supabase/supabase-js';
-import { projectId, publicAnonKey } from '../utils/supabase/info';
+// We use the central supabase client you created in the src folder
+import { supabase } from '../../supabaseclient';
 
 interface AuthContextType {
   user: any | null;
@@ -26,13 +26,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const supabase = createClient(
-    `https://${projectId}.supabase.co`,
-    publicAnonKey
-  );
-
   useEffect(() => {
-    // Check for existing session
+    // Check for existing session on app load
     const checkSession = async () => {
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
@@ -48,30 +43,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     checkSession();
+
+    // Listen for auth state changes (login/logout)
+    // Added : any to _event and session to clear the TS errors
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
+      setUser(session?.user ?? null);
+      setAccessToken(session?.access_token ?? null);
+      setLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
   const signup = async (email: string, password: string, name: string) => {
     try {
-      const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-b84f09d0/auth/signup`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${publicAnonKey}`,
-          },
-          body: JSON.stringify({ email, password, name }),
+      // Use the built-in Supabase signup instead of a manual fetch call
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { full_name: name }
         }
-      );
+      });
 
-      const data = await response.json();
+      if (error) throw error;
       
-      if (!response.ok) {
-        throw new Error(data.error || 'Signup failed');
+      // If signup is successful, the user is created in your dashboard
+      if (data.user) {
+        setUser(data.user);
+        if (data.session) setAccessToken(data.session.access_token);
       }
-
-      // Now sign in
-      await login(email, password);
     } catch (error) {
       console.error('Signup error:', error);
       throw error;
@@ -85,9 +86,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         password,
       });
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       setUser(data.user);
       setAccessToken(data.session.access_token);
