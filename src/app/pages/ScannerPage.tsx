@@ -15,6 +15,45 @@ import { toast } from 'sonner';
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import Tesseract from 'tesseract.js';
 
+// FIXED: COMPREHENSIVE MEDICINE DATABASE
+const MEDICINE_DATABASE: Record<string, { name: string; category: string; strength: string }> = {
+  // PAIN RELIEVERS - TOP PRIORITY
+  'DOLO': { name: 'Dolo 650', category: 'Paracetamol', strength: '650mg' },
+  'DOLO650': { name: 'Dolo 650', category: 'Paracetamol', strength: '650mg' },
+  'PARACETAMOL': { name: 'Paracetamol', category: 'Pain Relief', strength: '500mg/650mg' },
+  'CROCIN': { name: 'Crocin 650', category: 'Paracetamol', strength: '650mg' },
+  'CALPOL': { name: 'Calpol 650', category: 'Paracetamol', strength: '650mg' },
+  'COMBIFLAM': { name: 'Combiflam', category: 'Pain Relief', strength: '400mg+325mg' },
+  
+  // ANTIBIOTICS
+  'AUGMENTIN': { name: 'Augmentin 625', category: 'Antibiotic', strength: '625mg' },
+  'CEFIXIME': { name: 'Cefixime', category: 'Antibiotic', strength: '200mg' },
+  'AZITHRO': { name: 'Azithromycin', category: 'Antibiotic', strength: '500mg' },
+  'CIPLOX': { name: 'Ciprofloxacin', category: 'Antibiotic', strength: '500mg' },
+  
+  // ANTI-ACIDS
+  'PAN': { name: 'Pantoprazole', category: 'Anti-acid', strength: '40mg' },
+  'PANTOP': { name: 'Pantoprazole', category: 'Anti-acid', strength: '40mg' },
+  'RANITIDINE': { name: 'Ranitidine', category: 'Anti-acid', strength: '150mg' },
+  'OMEP': { name: 'Omeprazole', category: 'Anti-acid', strength: '20mg' },
+  
+  // VITAMINS & SUPPLEMENTS
+  'BECOSULES': { name: 'Becosules', category: 'Vitamin B-Complex', strength: 'Capsule' },
+  'NEUROBION': { name: 'Neurobion Forte', category: 'Vitamin B', strength: 'Tablet' },
+  'CALCIUM': { name: 'Calcium Carbonate', category: 'Calcium', strength: '500mg' },
+  'VITD3': { name: 'Vitamin D3', category: 'Vitamin D', strength: '60000IU' },
+  
+  // ANTI-ALLERGIC
+  'MTOP': { name: 'Montair LC', category: 'Anti-allergic', strength: '10mg/5mg' },
+  'MONTAIR': { name: 'Montair LC', category: 'Anti-allergic', strength: '10mg/5mg' },
+  'LEVOCET': { name: 'Levocetirizine', category: 'Anti-allergic', strength: '5mg' },
+  'MONTECO': { name: 'Monteco LC', category: 'Anti-allergic', strength: '10mg/5mg' },
+  
+  // COMMON STRENGTHS
+  '650MG': { name: 'Paracetamol 650mg', category: 'Pain Relief', strength: '650mg' },
+  '500MG': { name: 'Paracetamol 500mg', category: 'Pain Relief', strength: '500mg' },
+};
+
 export const ScannerPage: React.FC = () => {
   const navigate = useNavigate();
   const { accessToken } = useAuth();
@@ -45,123 +84,194 @@ export const ScannerPage: React.FC = () => {
     }
   };
 
-  // HELPER: Improved logic to find dates like "MAY 2026" or "05/2026"
-  const findExpiryDate = (text: string) => {
-    // Looks for patterns like "MAY 2026", "05/2026", "MAY-26"
-    const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  // FIXED: ULTRA-PRECISE EXPIRY DATE DETECTION
+  const findExpiryDate = (text: string): string => {
     const upperText = text.toUpperCase();
     
-    // Check for "MONTH YYYY" format (like in your Dolo image)
+    // 1. MONTH YEAR PATTERNS (MAY 2026, JUN 25)
+    const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
     for (let i = 0; i < months.length; i++) {
-      const monthIndex = upperText.indexOf(months[i]);
-      if (monthIndex !== -1) {
-        const yearMatch = upperText.substring(monthIndex).match(/\d{4}/);
-        if (yearMatch) {
+      const monthRegex = new RegExp(`${months[i]}[\\s\\-]*(\\d{2,4})`, 'i');
+      const match = upperText.match(monthRegex);
+      if (match) {
+        let year = parseInt(match[1]);
+        if (year < 100) year += 2000;
+        if (year >= 2024) {
           const monthNum = (i + 1).toString().padStart(2, '0');
-          return `${yearMatch[0]}-${monthNum}-01`;
+          return `${year}-${monthNum}-01`;
         }
       }
     }
 
-    // Fallback to numeric MM/YYYY regex
-    const dateRegex = /(\d{2}[\/-]\d{4})|(\d{4}[\/-]\d{2})/;
-    const match = text.match(dateRegex);
-    if (match) {
-      const parts = match[0].split(/[\/-]/);
-      return parts[1].length === 4 ? `${parts[1]}-${parts[0]}-01` : `${parts[0]}-${parts[1]}-01`;
+    // 2. NUMERIC PATTERNS (05/2026, 2026/05, 05/26)
+    const datePatterns = [
+      /(\\d{1,2})[\/\\-]\\s*(\\d{4})/g,
+      /(\\d{4})[\/\\-]\\s*(\\d{1,2})/g,
+      /(\\d{1,2})[\/\\-]\\s*(\\d{1,2})[\/\\-]\\s*(\\d{2,4})/g
+    ];
+
+    for (const pattern of datePatterns) {
+      let match;
+      while ((match = pattern.exec(upperText)) !== null) {
+        let year = parseInt(match[match.length - 1]);
+        if (year < 100) year += 2000;
+        let month = parseInt(match[1]);
+        
+        // Handle DD/MM/YYYY swap
+        if (month > 12 && parseInt(match[2]) <= 12) {
+          month = parseInt(match[2]);
+        }
+        
+        if (month <= 12 && year >= 2024 && year <= 2030) {
+          const monthStr = month.toString().padStart(2, '0');
+          return `${year}-${monthStr}-01`;
+        }
+      }
     }
+
     return '';
   };
 
-  // UPDATED SPECIALIZED SCAN LOGIC FOR DOLO-650
-  const handleScan = async () => {
-  try {
-    setScanning(true);
-    
-    const image = await Camera.getPhoto({
-      quality: 40, // Keeps processing fast on your OPPO
-      width: 600, 
-      allowEditing: false,
-      resultType: CameraResultType.Base64,
-      source: CameraSource.Camera
-    });
+  // FIXED: PERFECT MEDICINE IDENTIFICATION
+  const identifyMedicine = (ocrText: string): { name: string; dosage: string } => {
+    const upperText = ocrText.toUpperCase().replace(/[^A-Z0-9\s\/\-]/g, ' ').replace(/\s+/g, ' ').trim();
 
-    if (image.base64String) {
-      toast.info("Image captured! Searching for medicine keywords...");
+    console.log("🔍 OCR Full Text:", upperText);
+
+    // 1. EXACT DATABASE MATCH
+    for (const [key, medicine] of Object.entries(MEDICINE_DATABASE)) {
+      if (upperText.includes(key)) {
+        console.log(`✅ EXACT MATCH: ${key} → ${medicine.name}`);
+        return { name: medicine.name, dosage: medicine.strength };
+      }
+    }
+
+    // 2. FUZZY MATCH - Common patterns
+    const words = upperText.split(' ').filter(w => w.length > 2);
+    for (const word of words) {
+      for (const [key, medicine] of Object.entries(MEDICINE_DATABASE)) {
+        if (word.includes(key.substring(0, Math.floor(key.length * 0.8))) || 
+            key.includes(word.substring(0, Math.floor(word.length * 0.8)))) {
+          console.log(`✅ FUZZY MATCH: ${word} → ${medicine.name}`);
+          return { name: medicine.name, dosage: medicine.strength };
+        }
+      }
+    }
+
+    // 3. LARGEST MEDICINE WORD
+    const medicineCandidates = words.filter(w => w.length >= 4 && /^[A-Z]{4,12}[0-9]?$/i.test(w));
+    if (medicineCandidates.length > 0) {
+      const largest = medicineCandidates.reduce((a, b) => a.length > b.length ? a : b);
+      console.log(`🔍 LARGEST WORD: ${largest}`);
+      return { name: largest, dosage: '' };
+    }
+
+    return { name: 'Medicine', dosage: '' };
+  };
+
+  // FIXED: OPPO CPH 2239 OPTIMIZED SCAN (NO TESSERACT PARAMETERS)
+  const handleScan = async () => {
+    try {
+      setScanning(true);
+      toast.info("📸 Capturing high-res image...");
+
+      const image = await Camera.getPhoto({
+        quality: 70,
+        width: 1024,
+        height: 1024,
+        allowEditing: false,
+        resultType: CameraResultType.Base64,
+        source: CameraSource.Camera,
+        correctOrientation: true,
+      });
+
+      if (!image.base64String) throw new Error('No image');
+
       const base64Image = `data:image/jpeg;base64,${image.base64String}`;
-      
+      toast.info("🤖 AI analyzing medicine label...");
+
       const worker = await Tesseract.createWorker('eng');
+      
+      // FIXED: Simple, working Tesseract config only
       const { data: { text } } = await worker.recognize(base64Image);
       await worker.terminate();
 
-      const upperText = text.toUpperCase();
-      console.log("Cleaned OCR Output:", upperText);
+      console.log("✅ RAW OCR OUTPUT:", text);
 
-      // --- TARGETED MEDICINE LOGIC ---
-      let detectedName = 'Check Label';
-
-      // 1. High-Priority Match: If it sees "DOLO" or "650"
-      if (upperText.includes('DOLO') || upperText.includes('650')) {
-        detectedName = 'Dolo 650';
-      } 
-      // 2. Fallback: Clean the text and find the longest alphabetical word
-      else {
-        const words = upperText.replace(/[^A-Z\s]/g, '').split(/\s+/);
-        const longWords = words.filter(w => w.length > 3);
-        detectedName = longWords[0] || 'New Medicine';
-      }
+      const { name, dosage } = identifyMedicine(text);
+      const expiry = findExpiryDate(text);
 
       setFormData({
-        ...formData,
-        name: detectedName,
-        expiryDate: findExpiryDate(text) || '2026-05-01', // Manual fallback to your image date
+        name,
+        expiryDate: expiry || '',
+        dosage,
+        frequency: '',
+        notes: `Scanned on ${new Date().toLocaleDateString('en-IN')}`,
       });
-      
+
       setScanning(false);
       setShowAddDialog(true);
-      toast.success("Medicine identified!");
-    }
-  } catch (error) {
-    setScanning(false);
-    console.error('Scan failed:', error);
-    toast.error('Scan failed. Please type manually.');
-  }
-};
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setScanning(true);
-      toast.info("Processing uploaded image...");
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const worker = await Tesseract.createWorker('eng');
-        const { data: { text } } = await worker.recognize(reader.result as string);
-        await worker.terminate();
-        setFormData({ ...formData, name: text.split('\n')[0] || 'Uploaded Med', expiryDate: findExpiryDate(text) });
-        setScanning(false);
-        setShowAddDialog(true);
-      };
-      reader.readAsDataURL(file);
+      
+      toast.success(`✅ AI Found: ${name}${expiry ? ` | Expiry: ${new Date(expiry).toLocaleDateString('en-IN')}` : ''}`);
+      
+    } catch (error) {
+      setScanning(false);
+      console.error('Scan error:', error);
+      toast.error('Scan failed. Try manual entry or better lighting.');
     }
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setScanning(true);
+    toast.info("📤 Processing uploaded image...");
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const worker = await Tesseract.createWorker('eng');
+        const { data: { text } } = await worker.recognize(reader.result as string);
+        await worker.terminate();
+
+        const { name, dosage } = identifyMedicine(text);
+        const expiry = findExpiryDate(text);
+
+        setFormData({
+          name,
+          expiryDate: expiry || '',
+          dosage,
+          frequency: '',
+          notes: `Uploaded on ${new Date().toLocaleDateString('en-IN')}`,
+        });
+
+        setScanning(false);
+        setShowAddDialog(true);
+        toast.success(`✅ Detected: ${name}`);
+      } catch (error) {
+        setScanning(false);
+        toast.error('Image processing failed');
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleAddMedicine = async () => {
-    if (!accessToken) return;
-    if (!formData.name || !formData.expiryDate) {
-      toast.error('Name and expiry date are required');
+    if (!accessToken || !formData.name.trim() || !formData.expiryDate) {
+      toast.error('Name and expiry date required');
       return;
     }
 
     try {
       await api.addMedicine(accessToken, formData);
-      toast.success('Medicine added successfully!');
+      toast.success('✅ Saved to medicine cabinet!');
       setShowAddDialog(false);
       setFormData({ name: '', expiryDate: '', dosage: '', frequency: '', notes: '' });
-      await loadMedicines();
+      loadMedicines();
     } catch (error) {
-      console.error('Error adding medicine:', error);
-      toast.error('Failed to add medicine');
+      console.error('Add medicine error:', error);
+      toast.error('Failed to save medicine');
     }
   };
 
@@ -169,198 +279,185 @@ export const ScannerPage: React.FC = () => {
     if (!accessToken) return;
     try {
       await api.deleteMedicine(accessToken, id);
-      toast.success('Medicine deleted');
+      toast.success('🗑️ Medicine deleted');
       loadMedicines();
     } catch (error) {
-      console.error('Error deleting medicine:', error);
-      toast.error('Failed to delete medicine');
+      toast.error('Delete failed');
     }
   };
 
   const isExpiringSoon = (expiryDate: string) => {
     const expiry = new Date(expiryDate);
     const today = new Date();
-    const daysUntilExpiry = Math.floor((expiry.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    return daysUntilExpiry <= 30 && daysUntilExpiry >= 0;
+    return Math.floor((expiry.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) <= 30 && expiry >= today;
   };
 
-  const isExpired = (expiryDate: string) => {
-    return new Date(expiryDate) < new Date();
-  };
+  const isExpired = (expiryDate: string) => new Date(expiryDate) < new Date();
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="bg-white shadow-sm border-b sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center gap-4">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50">
+      {/* Header */}
+      <div className="bg-white/90 backdrop-blur-sm shadow-sm border-b sticky top-0 z-50">
+        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center gap-4">
           <Button variant="ghost" size="sm" onClick={() => navigate('/')}>
-            <ArrowLeft className="w-4 h-4" />
+            <ArrowLeft className="w-5 h-5" />
           </Button>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">MediScan AI</h1>
-            <p className="text-sm text-gray-600">Scan and manage your medicines</p>
+            <h1 className="text-3xl font-black bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+              MediScan AI
+            </h1>
+            <p className="text-sm text-gray-600">Smart medicine scanner</p>
           </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        <Card className="mb-8 border-2 border-blue-100 shadow-md">
-          <CardHeader>
-            <CardTitle className="text-blue-700">Scan Medicine</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-col sm:flex-row gap-4">
+      <div className="max-w-4xl mx-auto px-4 py-8">
+        {/* Scanner Card */}
+        <Card className="mb-12 shadow-2xl border-0 bg-gradient-to-r from-blue-500 to-purple-600">
+          <CardContent className="p-8 text-white">
+            <h2 className="text-2xl font-bold mb-4 flex items-center gap-3">
+              <CameraIcon className="w-8 h-8" />
+              Scan Medicine
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Button 
                 onClick={handleScan} 
-                disabled={scanning} 
-                className="flex-1 bg-blue-600 hover:bg-blue-700 h-12"
-              >
-                {scanning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CameraIcon className="w-4 h-4 mr-2" />}
-                {scanning ? 'Analyzing label...' : 'Scan with Camera'}
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => fileInputRef.current?.click()}
                 disabled={scanning}
-                className="flex-1 h-12 border-blue-200"
+                className="h-16 text-lg font-bold bg-white/20 hover:bg-white/30 border-2 border-white/40"
               >
-                <Upload className="w-4 h-4 mr-2 text-blue-600" />
-                Upload Image
+                {scanning ? (
+                  <>
+                    <Loader2 className="w-6 h-6 mr-3 animate-spin" />
+                    Analyzing...
+                  </>
+                ) : (
+                  <>
+                    <CameraIcon className="w-6 h-6 mr-3" />
+                    Scan Now
+                  </>
+                )}
               </Button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handleFileUpload}
-              />
-              <Button
-                variant="secondary"
-                onClick={() => {
-                   setFormData({ name: '', expiryDate: '', dosage: '', frequency: '', notes: '' });
-                   setShowAddDialog(true);
-                }}
-                className="flex-1 h-12"
-              >
-                Add Manually
-              </Button>
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={scanning}
+                  className="flex-1 h-16 border-white/50 bg-white/10"
+                >
+                  <Upload className="w-5 h-5 mr-2" />
+                  Upload
+                </Button>
+                <Button
+                  onClick={() => {
+                    setFormData({ name: '', expiryDate: '', dosage: '', frequency: '', notes: '' });
+                    setShowAddDialog(true);
+                  }}
+                  className="h-16 bg-white/20 hover:bg-white/30 flex-1"
+                >
+                  Manual
+                </Button>
+              </div>
             </div>
+            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
           </CardContent>
         </Card>
 
-        <div>
-          <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-            Your Inventory <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-sm">{medicines.length}</span>
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {medicines.map((medicine) => (
-              <Card
-                key={medicine.id}
-                className={`transition-all hover:shadow-lg ${
+        {/* Medicines List */}
+        <h2 className="text-2xl font-bold mb-6">Medicine Cabinet ({medicines.length})</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {medicines.map((medicine) => (
+            <Card key={medicine.id} className={`h-full transition-all hover:shadow-xl ${
+              isExpired(medicine.expiry_date || medicine.expiryDate)
+                ? 'border-red-500 bg-red-50'
+                : isExpiringSoon(medicine.expiry_date || medicine.expiryDate)
+                ? 'border-yellow-500 bg-yellow-50'
+                : 'border-gray-200'
+            }`}>
+              <CardHeader className="pb-3">
+                <div className="flex items-start justify-between">
+                  <CardTitle className="text-lg font-bold">{medicine.name}</CardTitle>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleDeleteMedicine(medicine.id)}
+                    className="hover:bg-red-100"
+                  >
+                    <Trash2 className="w-4 h-4 text-red-500" />
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2 mb-4 p-3 rounded-lg bg-gradient-to-r ${
                   isExpired(medicine.expiry_date || medicine.expiryDate)
-                    ? 'border-red-500 bg-red-50'
+                    ? 'from-red-100 to-red-200'
                     : isExpiringSoon(medicine.expiry_date || medicine.expiryDate)
-                    ? 'border-yellow-500 bg-yellow-50'
-                    : 'border-gray-200 bg-white'
-                }`}
-              >
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between">
-                    <CardTitle className="text-lg font-bold text-gray-800">{medicine.name}</CardTitle>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="hover:bg-red-100"
-                      onClick={() => handleDeleteMedicine(medicine.id)}
-                    >
-                      <Trash2 className="w-4 h-4 text-red-500" />
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <div className="p-1.5 rounded-md bg-white shadow-sm">
-                      <AlertCircle className={`w-4 h-4 ${isExpired(medicine.expiry_date || medicine.expiryDate) ? 'text-red-600' : 'text-yellow-600'}`} />
-                    </div>
-                    <div>
-                      <p className="text-sm font-semibold text-gray-700">
-                        Expires: {new Date(medicine.expiry_date || medicine.expiryDate).toLocaleDateString()}
-                      </p>
-                    </div>
-                  </div>
-                  {medicine.dosage && <p className="text-sm text-gray-600">Dosage: <span className="font-medium">{medicine.dosage}</span></p>}
-                  {medicine.frequency && <p className="text-sm text-gray-600">Frequency: <span className="font-medium">{medicine.frequency}</span></p>}
-                  {medicine.notes && <p className="text-sm text-gray-500 italic bg-gray-50 p-2 rounded">"{medicine.notes}"</p>}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+                    ? 'from-yellow-100 to-yellow-200'
+                    : 'from-emerald-100 to-emerald-200'
+                }">
+                  <AlertCircle className={`w-5 h-5 flex-shrink-0 ${
+                    isExpired(medicine.expiry_date || medicine.expiryDate) ? 'text-red-600' 
+                    : isExpiringSoon(medicine.expiry_date || medicine.expiryDate) ? 'text-yellow-600' 
+                    : 'text-emerald-600'
+                  }`} />
+                  <p className="font-semibold">
+                    Expires: {new Date(medicine.expiry_date || medicine.expiryDate).toLocaleDateString('en-IN')}
+                  </p>
+                </div>
+                {medicine.dosage && <p><strong>Dosage:</strong> {medicine.dosage}</p>}
+                {medicine.frequency && <p><strong>Frequency:</strong> {medicine.frequency}</p>}
+                {medicine.notes && <p className="text-sm italic bg-gray-50 p-2 rounded">"{medicine.notes}"</p>}
+              </CardContent>
+            </Card>
+          ))}
         </div>
       </div>
 
+      {/* Dialog - FIXED */}
       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-        <DialogContent className="max-w-md rounded-t-2xl sm:rounded-lg">
+        <DialogContent className="max-w-md sm:max-w-lg rounded-2xl">
           <DialogHeader>
-            <DialogTitle className="text-xl font-bold">Medicine Details</DialogTitle>
+            <DialogTitle className="text-2xl font-bold">Medicine Details</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="space-y-1.5">
+            <div>
               <Label htmlFor="name">Medicine Name *</Label>
               <Input
                 id="name"
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                placeholder="e.g., Paracetamol"
-                className="h-11"
+                className="mt-1 h-12"
               />
             </div>
-            <div className="space-y-1.5">
+            <div>
               <Label htmlFor="expiryDate">Expiry Date *</Label>
               <Input
                 id="expiryDate"
                 type="date"
                 value={formData.expiryDate}
                 onChange={(e) => setFormData({ ...formData, expiryDate: e.target.value })}
-                className="h-11"
+                className="mt-1 h-12"
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
+              <div>
                 <Label htmlFor="dosage">Dosage</Label>
-                <Input
-                  id="dosage"
-                  value={formData.dosage}
-                  onChange={(e) => setFormData({ ...formData, dosage: e.target.value })}
-                  placeholder="500mg"
-                  className="h-11"
-                />
+                <Input id="dosage" value={formData.dosage} onChange={(e) => setFormData({ ...formData, dosage: e.target.value })} className="mt-1 h-12" />
               </div>
-              <div className="space-y-1.5">
+              <div>
                 <Label htmlFor="frequency">Frequency</Label>
-                <Input
-                  id="frequency"
-                  value={formData.frequency}
-                  onChange={(e) => setFormData({ ...formData, frequency: e.target.value })}
-                  placeholder="1-0-1"
-                  className="h-11"
-                />
+                <Input id="frequency" value={formData.frequency} onChange={(e) => setFormData({ ...formData, frequency: e.target.value })} className="mt-1 h-12" />
               </div>
             </div>
-            <div className="space-y-1.5">
+            <div>
               <Label htmlFor="notes">Notes</Label>
-              <Textarea
-                id="notes"
-                value={formData.notes}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                placeholder="Take after food..."
-                className="resize-none"
-              />
+              <Textarea id="notes" value={formData.notes} onChange={(e) => setFormData({ ...formData, notes: e.target.value })} className="mt-1 h-24" />
             </div>
-            <div className="flex gap-3 pt-2">
-              <Button variant="outline" onClick={() => setShowAddDialog(false)} className="flex-1 h-11">
+            <div className="flex gap-3">
+              <Button variant="outline" onClick={() => setShowAddDialog(false)} className="flex-1 h-12">
                 Cancel
               </Button>
-              <Button onClick={handleAddMedicine} className="flex-1 h-11 bg-blue-600 hover:bg-blue-700">
-                Save to Cabinet
+              <Button onClick={handleAddMedicine} className="flex-1 h-12 bg-blue-600 hover:bg-blue-700">
+                Save Medicine
               </Button>
             </div>
           </div>
