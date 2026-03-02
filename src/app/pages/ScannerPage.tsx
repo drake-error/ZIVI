@@ -76,36 +76,42 @@ export const ScannerPage: React.FC = () => {
   const loadMedicines = async () => {
     if (!accessToken) return;
     try {
-      const data = await api.getMedicines(accessToken);
-      setMedicines(data.medicines || []);
+      const response = await api.getMedicines(accessToken);
+      
+      // Dig deep into the response to find your data
+      const dataArray = response?.medicines || response?.data || (Array.isArray(response) ? response : []);
+      
+      // PROTECTION: If we just added an item manually, don't let a smaller 
+      // server list overwrite our current view for a few seconds.
+      setMedicines((current) => {
+        if (dataArray.length < current.length && current.length > 0) {
+          console.log("Blocking stale server refresh to prevent glitch...");
+          return current; 
+        }
+        return dataArray;
+      });
     } catch (error) {
-      console.error('Error loading medicines:', error);
-      toast.error('Failed to load medicines');
+      console.error('Error loading:', error);
     }
   };
 
-  // HIGH-SENSITIVITY EXPIRY DETECTION
-const findExpiryDate = (text: string): string => {
+  const findExpiryDate = (text: string): string => {
   const upperText = text.toUpperCase();
   const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
   
-  // Pattern 1: Look for MONTH YYYY (Matches 'MAY 2027' on your strip)
   for (let i = 0; i < months.length; i++) {
     const monthRegex = new RegExp(`(${months[i]})[\\s\\.\\-\\/]*(\\d{2,4})`, 'i');
     const match = upperText.match(monthRegex);
     
     if (match) {
       let year = parseInt(match[2]);
-      // If AI reads '27', convert it to '2027'
       if (year < 100) year += 2000; 
       
       const monthNum = (i + 1).toString().padStart(2, '0');
-      console.log(`✅ Expiry Found: ${months[i]} ${year}`);
-      return `${year}-${monthNum}-01`; // Returns '2027-05-01'
+      return `${year}-${monthNum}-01`;
     }
   }
 
-  // Pattern 2: Numeric fallback (Matches 05/2027 or 05-27)
   const numRegex = /(\d{2})[\/\-\. ]+(\d{2,4})/;
   const numMatch = upperText.match(numRegex);
   if (numMatch) {
@@ -117,47 +123,37 @@ const findExpiryDate = (text: string): string => {
     }
   }
 
-  return ''; // Return empty if no clear date is found
+  return '';
 };
 
-  // FIXED: PERFECT MEDICINE IDENTIFICATION
   const identifyMedicine = (ocrText: string): { name: string; dosage: string } => {
     const upperText = ocrText.toUpperCase().replace(/[^A-Z0-9\s\/\-]/g, ' ').replace(/\s+/g, ' ').trim();
 
-    console.log("🔍 OCR Full Text:", upperText);
-
-    // 1. EXACT DATABASE MATCH
     for (const [key, medicine] of Object.entries(MEDICINE_DATABASE)) {
       if (upperText.includes(key)) {
-        console.log(`✅ EXACT MATCH: ${key} → ${medicine.name}`);
         return { name: medicine.name, dosage: medicine.strength };
       }
     }
 
-    // 2. FUZZY MATCH - Common patterns
     const words = upperText.split(' ').filter(w => w.length > 2);
     for (const word of words) {
       for (const [key, medicine] of Object.entries(MEDICINE_DATABASE)) {
         if (word.includes(key.substring(0, Math.floor(key.length * 0.8))) || 
             key.includes(word.substring(0, Math.floor(word.length * 0.8)))) {
-          console.log(`✅ FUZZY MATCH: ${word} → ${medicine.name}`);
           return { name: medicine.name, dosage: medicine.strength };
         }
       }
     }
 
-    // 3. LARGEST MEDICINE WORD
     const medicineCandidates = words.filter(w => w.length >= 4 && /^[A-Z]{4,12}[0-9]?$/i.test(w));
     if (medicineCandidates.length > 0) {
       const largest = medicineCandidates.reduce((a, b) => a.length > b.length ? a : b);
-      console.log(`🔍 LARGEST WORD: ${largest}`);
       return { name: largest, dosage: '' };
     }
 
     return { name: 'Medicine', dosage: '' };
   };
 
-  // FIXED: OPPO CPH 2239 OPTIMIZED SCAN (NO TESSERACT PARAMETERS)
   const handleScan = async () => {
     try {
       setScanning(true);
@@ -179,16 +175,11 @@ const findExpiryDate = (text: string): string => {
       toast.info("🤖 AI analyzing medicine label...");
 
       const worker = await Tesseract.createWorker('eng');
-      
-      // FIXED: Simple, working Tesseract config only
       const { data: { text } } = await worker.recognize(base64Image);
       await worker.terminate();
       const detectedDate = findExpiryDate(text);
 
-      console.log("✅ RAW OCR OUTPUT:", text);
-
       const { name, dosage } = identifyMedicine(text);
-      const expiry = findExpiryDate(text);
 
       setFormData({
         name,
@@ -200,8 +191,6 @@ const findExpiryDate = (text: string): string => {
 
       setScanning(false);
       setShowAddDialog(true);
-      
-      toast.success(`✅ AI Found: ${name}${expiry ? ` | Expiry: ${new Date(expiry).toLocaleDateString('en-IN')}` : ''}`);
       
     } catch (error) {
       setScanning(false);
@@ -237,7 +226,6 @@ const findExpiryDate = (text: string): string => {
 
         setScanning(false);
         setShowAddDialog(true);
-        toast.success(`✅ Detected: ${name}`);
       } catch (error) {
         setScanning(false);
         toast.error('Image processing failed');
@@ -253,14 +241,38 @@ const findExpiryDate = (text: string): string => {
     }
 
     try {
-      await api.addMedicine(accessToken, formData);
-      toast.success('✅ Saved to medicine cabinet!');
+      const payload = {
+        ...formData,
+        expiry_date: formData.expiryDate, // Database naming
+        expiryDate: formData.expiryDate   // Frontend naming
+      };
+
+      // Close dialog immediately for better UX
       setShowAddDialog(false);
+      toast.info("Saving to cabinet...");
+
+      const newMed = await api.addMedicine(accessToken, payload);
+      
+      // --- THE ANTI-GLITCH LOCK ---
+      // Manually inject the new medicine into the UI immediately
+      setMedicines((prev) => {
+        const alreadyExists = prev.find(m => m.name === newMed.name);
+        if (alreadyExists) return prev;
+        return [newMed, ...prev];
+      });
+
+      toast.success('✅ Successfully saved!');
       setFormData({ name: '', expiryDate: '', dosage: '', frequency: '', notes: '' });
-      loadMedicines();
+
+      // Wait 2 seconds before asking the server for the list 
+      // This gives the backend time to finish the "write" cycle
+      setTimeout(() => {
+        loadMedicines();
+      }, 2000);
+
     } catch (error) {
-      console.error('Add medicine error:', error);
-      toast.error('Failed to save medicine');
+      console.error('Save error:', error);
+      toast.error('Failed to save. Check internet.');
     }
   };
 
@@ -274,18 +286,10 @@ const findExpiryDate = (text: string): string => {
       toast.error('Delete failed');
     }
   };
-
-  const isExpiringSoon = (expiryDate: string) => {
-    const expiry = new Date(expiryDate);
-    const today = new Date();
-    return Math.floor((expiry.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) <= 30 && expiry >= today;
-  };
-
-  const isExpired = (expiryDate: string) => new Date(expiryDate) < new Date();
+  
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50">
-      {/* Header */}
       <div className="bg-white/90 backdrop-blur-sm shadow-sm border-b sticky top-0 z-50">
         <div className="max-w-4xl mx-auto px-4 py-4 flex items-center gap-4">
           <Button variant="ghost" size="sm" onClick={() => navigate('/')}>
@@ -301,7 +305,6 @@ const findExpiryDate = (text: string): string => {
       </div>
 
       <div className="max-w-4xl mx-auto px-4 py-8">
-        {/* Scanner Card */}
         <Card className="mb-12 shadow-2xl border-0 bg-gradient-to-r from-blue-500 to-purple-600">
           <CardContent className="p-8 text-white">
             <h2 className="text-2xl font-bold mb-4 flex items-center gap-3">
@@ -351,57 +354,37 @@ const findExpiryDate = (text: string): string => {
           </CardContent>
         </Card>
 
-        {/* Medicines List */}
         <h2 className="text-2xl font-bold mb-6">Medicine Cabinet ({medicines.length})</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {medicines.map((medicine) => (
-            <Card key={medicine.id} className={`h-full transition-all hover:shadow-xl ${
-              isExpired(medicine.expiry_date || medicine.expiryDate)
-                ? 'border-red-500 bg-red-50'
-                : isExpiringSoon(medicine.expiry_date || medicine.expiryDate)
-                ? 'border-yellow-500 bg-yellow-50'
-                : 'border-gray-200'
-            }`}>
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <CardTitle className="text-lg font-bold">{medicine.name}</CardTitle>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleDeleteMedicine(medicine.id)}
-                    className="hover:bg-red-100"
-                  >
-                    <Trash2 className="w-4 h-4 text-red-500" />
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-center gap-2 mb-4 p-3 rounded-lg bg-gradient-to-r ${
-                  isExpired(medicine.expiry_date || medicine.expiryDate)
-                    ? 'from-red-100 to-red-200'
-                    : isExpiringSoon(medicine.expiry_date || medicine.expiryDate)
-                    ? 'from-yellow-100 to-yellow-200'
-                    : 'from-emerald-100 to-emerald-200'
-                }">
-                  <AlertCircle className={`w-5 h-5 flex-shrink-0 ${
-                    isExpired(medicine.expiry_date || medicine.expiryDate) ? 'text-red-600' 
-                    : isExpiringSoon(medicine.expiry_date || medicine.expiryDate) ? 'text-yellow-600' 
-                    : 'text-emerald-600'
-                  }`} />
-                  <p className="font-semibold">
-                    Expires: {new Date(medicine.expiry_date || medicine.expiryDate).toLocaleDateString('en-IN')}
-                  </p>
-                </div>
-                {medicine.dosage && <p><strong>Dosage:</strong> {medicine.dosage}</p>}
-                {medicine.frequency && <p><strong>Frequency:</strong> {medicine.frequency}</p>}
-                {medicine.notes && <p className="text-sm italic bg-gray-50 p-2 rounded">"{medicine.notes}"</p>}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+  {medicines.map((medicine) => {
+    // FIX: Look for every possible date key from Supabase
+    const rawDate = medicine.expiry_date || medicine.expiryDate || medicine.expiry;
+    
+    return (
+      <Card key={medicine.id} className="h-full shadow-md">
+        <CardHeader className="pb-3">
+          <div className="flex items-start justify-between">
+            <CardTitle className="text-lg font-bold">{medicine.name}</CardTitle>
+            <Button variant="ghost" size="sm" onClick={() => handleDeleteMedicine(medicine.id)}>
+              <Trash2 className="w-4 h-4 text-red-500" />
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50">
+            <AlertCircle className="w-5 h-5 text-blue-600" />
+            <p className="font-semibold text-blue-900">
+              Expires: {rawDate ? new Date(rawDate).toLocaleDateString('en-IN') : 'No Date Found'}
+            </p>
+          </div>
+          {medicine.dosage && <p className="mt-2 text-sm"><strong>Dosage:</strong> {medicine.dosage}</p>}
+        </CardContent>
+      </Card>
+    );
+  })}
+</div>
       </div>
 
-      {/* Dialog - FIXED */}
       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
         <DialogContent className="max-w-md sm:max-w-lg rounded-2xl">
           <DialogHeader>
