@@ -5,13 +5,13 @@ import { api } from '../utils/api';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
+// RESTORED: CardHeader and CardTitle
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Textarea } from '../components/ui/textarea';
-import { Camera as CameraIcon, Upload, ArrowLeft, Trash2, AlertCircle, Loader2 } from 'lucide-react';
+// RESTORED: Trash2 icon
+import { Camera as CameraIcon, Upload, ArrowLeft, AlertCircle, Loader2, Trash2, Pill } from 'lucide-react';
 import { toast } from 'sonner';
-
-// IMPORT CAPACITOR CAMERA AND TESSERACT
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import Tesseract from 'tesseract.js';
 
@@ -67,33 +67,43 @@ export const ScannerPage: React.FC = () => {
     frequency: '',
     notes: '',
   });
-  const fileInputRef = useRef<HTMLInputElement>(null);
+const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    loadMedicines();
-  }, [accessToken]);
+const isExpired = (d: string) => d ? new Date(d) < new Date() : false;
 
-  const loadMedicines = async () => {
-    if (!accessToken) return;
-    try {
-      const response = await api.getMedicines(accessToken);
-      
-      // Dig deep into the response to find your data
-      const dataArray = response?.medicines || response?.data || (Array.isArray(response) ? response : []);
-      
-      // PROTECTION: If we just added an item manually, don't let a smaller 
-      // server list overwrite our current view for a few seconds.
-      setMedicines((current) => {
-        if (dataArray.length < current.length && current.length > 0) {
-          console.log("Blocking stale server refresh to prevent glitch...");
-          return current; 
-        }
-        return dataArray;
-      });
-    } catch (error) {
-      console.error('Error loading:', error);
-    }
-  };
+const isExpiringSoon = (d: string) => {
+  if (!d) return false;
+  const expiry = new Date(d);
+  const today = new Date();
+  const diff = Math.floor((expiry.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  return diff <= 30 && diff >= 0;
+}; 
+
+useEffect(() => {
+  loadMedicines();
+}, [accessToken]);
+
+const loadMedicines = async () => {
+  if (!accessToken) return;
+  try {
+    const response = await api.getMedicines(accessToken);
+    
+    // Dig deep into the response to find your data
+    const dataArray = response?.medicines || response?.data || (Array.isArray(response) ? response : []);
+    
+    // PROTECTION: If we just added an item manually, don't let a smaller 
+    // server list overwrite our current view for a few seconds.
+    setMedicines((current) => {
+      if (dataArray.length < current.length && current.length > 0) {
+        console.log("Blocking stale server refresh to prevent glitch...");
+        return current; 
+      }
+      return dataArray;
+    });
+  } catch (error) {
+    console.error('Error loading:', error);
+  }
+};
 
   const findExpiryDate = (text: string): string => {
   const upperText = text.toUpperCase();
@@ -235,46 +245,30 @@ export const ScannerPage: React.FC = () => {
   };
 
   const handleAddMedicine = async () => {
-    if (!accessToken || !formData.name.trim() || !formData.expiryDate) {
-      toast.error('Name and expiry date required');
+  try {
+    if (!accessToken) {
+      toast.error('Not authenticated');
       return;
     }
-
-    try {
-      const payload = {
-        ...formData,
-        expiry_date: formData.expiryDate, // Database naming
-        expiryDate: formData.expiryDate   // Frontend naming
-      };
-
-      // Close dialog immediately for better UX
-      setShowAddDialog(false);
-      toast.info("Saving to cabinet...");
-
-      const newMed = await api.addMedicine(accessToken, payload);
-      
-      // --- THE ANTI-GLITCH LOCK ---
-      // Manually inject the new medicine into the UI immediately
-      setMedicines((prev) => {
-        const alreadyExists = prev.find(m => m.name === newMed.name);
-        if (alreadyExists) return prev;
-        return [newMed, ...prev];
-      });
-
-      toast.success('✅ Successfully saved!');
-      setFormData({ name: '', expiryDate: '', dosage: '', frequency: '', notes: '' });
-
-      // Wait 2 seconds before asking the server for the list 
-      // This gives the backend time to finish the "write" cycle
-      setTimeout(() => {
-        loadMedicines();
-      }, 2000);
-
-    } catch (error) {
-      console.error('Save error:', error);
-      toast.error('Failed to save. Check internet.');
-    }
-  };
+    
+    const payload = { 
+      ...formData, 
+      expiry_date: formData.expiryDate, // Most common for Supabase
+      expiry: formData.expiryDate       // Fallback key
+    };
+    
+    const newMed = await api.addMedicine(accessToken, payload);
+    
+    // Instant UI Update so it doesn't disappear
+    setMedicines(prev => [newMed, ...prev]);
+    
+    toast.success('Saved!');
+    setShowAddDialog(false);
+    await loadMedicines(); // Refresh pulse
+  } catch (error) {
+    toast.error('Save failed');
+  }
+};
 
   const handleDeleteMedicine = async (id: string) => {
     if (!accessToken) return;
@@ -356,32 +350,41 @@ export const ScannerPage: React.FC = () => {
 
         <h2 className="text-2xl font-bold mb-6">Medicine Cabinet ({medicines.length})</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-  {medicines.map((medicine) => {
-    // FIX: Look for every possible date key from Supabase
-    const rawDate = medicine.expiry_date || medicine.expiryDate || medicine.expiry;
+  {medicines.map((med) => {
+  // SIGNAL RESOLVER: Checks every possible name for the date
+  const rawDate = med.expiry_date || med.expiryDate || med.expiry;
+  
+  // Use these functions here to clear the 'never read' warnings
+  const expired = isExpired(rawDate); 
+  const expiringsSoon = isExpiringSoon(rawDate);
+
+  return (
+    <Card key={med.id} className={`shadow-md ${expired ? 'bg-red-50' : 'bg-white'}`}>
+      {/* FIXED: Using CardHeader and Trash2 properly */}
+      <CardHeader className="flex flex-row items-center justify-between pb-2">
+  <CardTitle className="text-lg font-bold flex items-center gap-2">
+    {/* 1. ADD PILL HERE TO FIX THE WARNING */}
+    <Pill className={`w-5 h-5 ${expired ? 'text-red-600' : expiringsSoon ? 'text-amber-500' : 'text-blue-600'}`} />
     
-    return (
-      <Card key={medicine.id} className="h-full shadow-md">
-        <CardHeader className="pb-3">
-          <div className="flex items-start justify-between">
-            <CardTitle className="text-lg font-bold">{medicine.name}</CardTitle>
-            <Button variant="ghost" size="sm" onClick={() => handleDeleteMedicine(medicine.id)}>
-              <Trash2 className="w-4 h-4 text-red-500" />
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50">
-            <AlertCircle className="w-5 h-5 text-blue-600" />
-            <p className="font-semibold text-blue-900">
-              Expires: {rawDate ? new Date(rawDate).toLocaleDateString('en-IN') : 'No Date Found'}
-            </p>
-          </div>
-          {medicine.dosage && <p className="mt-2 text-sm"><strong>Dosage:</strong> {medicine.dosage}</p>}
-        </CardContent>
-      </Card>
-    );
-  })}
+    {med.name}
+  </CardTitle>
+  
+  <Button variant="ghost" size="sm" onClick={() => handleDeleteMedicine(med.id)}>
+    <Trash2 className="w-4 h-4 text-red-500" />
+  </Button>
+</CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50">
+          <AlertCircle className="w-5 h-5 text-blue-600" />
+          <p className="font-bold text-blue-900">
+            {/* If signal found, show date; else show error */}
+            {rawDate ? `Expires: ${new Date(rawDate).toLocaleDateString('en-IN')}` : 'No Date Found'}
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+})}
 </div>
       </div>
 
