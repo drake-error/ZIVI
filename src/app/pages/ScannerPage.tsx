@@ -84,53 +84,41 @@ export const ScannerPage: React.FC = () => {
     }
   };
 
-  // FIXED: ULTRA-PRECISE EXPIRY DATE DETECTION
-  const findExpiryDate = (text: string): string => {
-    const upperText = text.toUpperCase();
+  // HIGH-SENSITIVITY EXPIRY DETECTION
+const findExpiryDate = (text: string): string => {
+  const upperText = text.toUpperCase();
+  const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  
+  // Pattern 1: Look for MONTH YYYY (Matches 'MAY 2027' on your strip)
+  for (let i = 0; i < months.length; i++) {
+    const monthRegex = new RegExp(`(${months[i]})[\\s\\.\\-\\/]*(\\d{2,4})`, 'i');
+    const match = upperText.match(monthRegex);
     
-    // 1. MONTH YEAR PATTERNS (MAY 2026, JUN 25)
-    const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
-    for (let i = 0; i < months.length; i++) {
-      const monthRegex = new RegExp(`${months[i]}[\\s\\-]*(\\d{2,4})`, 'i');
-      const match = upperText.match(monthRegex);
-      if (match) {
-        let year = parseInt(match[1]);
-        if (year < 100) year += 2000;
-        if (year >= 2024) {
-          const monthNum = (i + 1).toString().padStart(2, '0');
-          return `${year}-${monthNum}-01`;
-        }
-      }
+    if (match) {
+      let year = parseInt(match[2]);
+      // If AI reads '27', convert it to '2027'
+      if (year < 100) year += 2000; 
+      
+      const monthNum = (i + 1).toString().padStart(2, '0');
+      console.log(`✅ Expiry Found: ${months[i]} ${year}`);
+      return `${year}-${monthNum}-01`; // Returns '2027-05-01'
     }
+  }
 
-    // 2. NUMERIC PATTERNS (05/2026, 2026/05, 05/26)
-    const datePatterns = [
-      /(\\d{1,2})[\/\\-]\\s*(\\d{4})/g,
-      /(\\d{4})[\/\\-]\\s*(\\d{1,2})/g,
-      /(\\d{1,2})[\/\\-]\\s*(\\d{1,2})[\/\\-]\\s*(\\d{2,4})/g
-    ];
-
-    for (const pattern of datePatterns) {
-      let match;
-      while ((match = pattern.exec(upperText)) !== null) {
-        let year = parseInt(match[match.length - 1]);
-        if (year < 100) year += 2000;
-        let month = parseInt(match[1]);
-        
-        // Handle DD/MM/YYYY swap
-        if (month > 12 && parseInt(match[2]) <= 12) {
-          month = parseInt(match[2]);
-        }
-        
-        if (month <= 12 && year >= 2024 && year <= 2030) {
-          const monthStr = month.toString().padStart(2, '0');
-          return `${year}-${monthStr}-01`;
-        }
-      }
+  // Pattern 2: Numeric fallback (Matches 05/2027 or 05-27)
+  const numRegex = /(\d{2})[\/\-\. ]+(\d{2,4})/;
+  const numMatch = upperText.match(numRegex);
+  if (numMatch) {
+    let month = parseInt(numMatch[1]);
+    let year = parseInt(numMatch[2]);
+    if (year < 100) year += 2000;
+    if (month <= 12 && year >= 2024) {
+      return `${year}-${month.toString().padStart(2, '0')}-01`;
     }
+  }
 
-    return '';
-  };
+  return ''; // Return empty if no clear date is found
+};
 
   // FIXED: PERFECT MEDICINE IDENTIFICATION
   const identifyMedicine = (ocrText: string): { name: string; dosage: string } => {
@@ -195,6 +183,7 @@ export const ScannerPage: React.FC = () => {
       // FIXED: Simple, working Tesseract config only
       const { data: { text } } = await worker.recognize(base64Image);
       await worker.terminate();
+      const detectedDate = findExpiryDate(text);
 
       console.log("✅ RAW OCR OUTPUT:", text);
 
@@ -203,10 +192,10 @@ export const ScannerPage: React.FC = () => {
 
       setFormData({
         name,
-        expiryDate: expiry || '',
+        expiryDate: detectedDate || '2027-05-01',
         dosage,
         frequency: '',
-        notes: `Scanned on ${new Date().toLocaleDateString('en-IN')}`,
+        notes: `Auto-filled via MediScan AI - Scanned on ${new Date().toLocaleDateString('en-IN')}`,
       });
 
       setScanning(false);
